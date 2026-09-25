@@ -175,11 +175,11 @@ class CACHE : public MEMORY {
     uint64_t sim_access[NUM_CPUS][NUM_TYPES],
              sim_hit[NUM_CPUS][NUM_TYPES],
              sim_miss[NUM_CPUS][NUM_TYPES],
-	     sim_instr_miss[NUM_CPUS][NUM_TYPES],	//Neelu: To calculate instruction misses in L2
+	         sim_instr_miss[NUM_CPUS][NUM_TYPES],	//Neelu: To calculate instruction misses in L2
              roi_access[NUM_CPUS][NUM_TYPES],
              roi_hit[NUM_CPUS][NUM_TYPES],
              roi_miss[NUM_CPUS][NUM_TYPES],
-	     roi_instr_miss[NUM_CPUS][NUM_TYPES];
+	         roi_instr_miss[NUM_CPUS][NUM_TYPES];
 
     uint64_t total_miss_latency;
     
@@ -207,11 +207,11 @@ class CACHE : public MEMORY {
                 sim_access[i][j] = 0;
                 sim_hit[i][j] = 0;
                 sim_miss[i][j] = 0;
-		sim_instr_miss[i][j] = 0;
+		        sim_instr_miss[i][j] = 0;
                 roi_access[i][j] = 0;
                 roi_hit[i][j] = 0;
                 roi_miss[i][j] = 0;
-		roi_instr_miss[i][j] = 0;
+		        roi_instr_miss[i][j] = 0;
             }
         }
 
@@ -338,18 +338,18 @@ class CACHE : public MEMORY {
 
 
 
-         (CACHE::*update_replacement_state)(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
+         (CACHE::*update_replacement_state)(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
 
 
-	 	base_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
-	 	btb_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
-        l1i_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
-		l1d_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
-		l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
-		llc_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
-		itlb_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
-		dtlb_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
-		stlb_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit),
+	 	base_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
+	 	btb_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
+        l1i_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
+		l1d_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
+		l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
+		llc_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
+		itlb_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
+		dtlb_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
+		stlb_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit,uint8_t isint),
 
 
 

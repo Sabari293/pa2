@@ -117,8 +117,8 @@ class O3_CPU {
 
         // trace
         trace_file = NULL;
-	context_switch = 0;
-	operating_index = -1;
+        context_switch = 0;
+        operating_index = -1;
 	
 
         // instruction
@@ -148,7 +148,7 @@ class O3_CPU {
         branch_mispredict_stall_fetch = 0;
         mispredicted_branch_iw_index = 0;
         fetch_stall = 0;
-	fetch_resume_cycle = 0;
+        fetch_resume_cycle = 0;     
         num_branch = 0;
         branch_mispredictions = 0;
 
