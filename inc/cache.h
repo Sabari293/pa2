@@ -175,7 +175,8 @@ class CACHE : public MEMORY {
     uint64_t sim_access[NUM_CPUS][NUM_TYPES],
              sim_hit[NUM_CPUS][NUM_TYPES],
              sim_miss[NUM_CPUS][NUM_TYPES],
-	         sim_instr_miss[NUM_CPUS][NUM_TYPES],	//Neelu: To calculate instruction misses in L2
+	         sim_instr_miss[NUM_CPUS][NUM_TYPES],
+             sim_instr_hit[NUM_CPUS][NUM_TYPES],	//Neelu: To calculate instruction misses in L2
              roi_access[NUM_CPUS][NUM_TYPES],
              roi_hit[NUM_CPUS][NUM_TYPES],
              roi_miss[NUM_CPUS][NUM_TYPES],
@@ -208,6 +209,7 @@ class CACHE : public MEMORY {
                 sim_hit[i][j] = 0;
                 sim_miss[i][j] = 0;
 		        sim_instr_miss[i][j] = 0;
+                sim_instr_hit[i][j] = 0;
                 roi_access[i][j] = 0;
                 roi_hit[i][j] = 0;
                 roi_miss[i][j] = 0;
