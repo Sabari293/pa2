@@ -78,7 +78,7 @@ void record_roi_stats(uint32_t cpu, CACHE *cache)
         cache->roi_access[cpu][i] = cache->sim_access[cpu][i];
         cache->roi_hit[cpu][i] = cache->sim_hit[cpu][i];
         cache->roi_miss[cpu][i] = cache->sim_miss[cpu][i];
-	cache->roi_instr_miss[cpu][i] = cache->sim_instr_miss[cpu][i];
+	    cache->roi_instr_miss[cpu][i] = cache->sim_instr_miss[cpu][i];
     }
 }
 
@@ -162,7 +162,7 @@ void print_roi_stats(uint32_t cpu, CACHE *cache)
         TOTAL_ACCESS += cache->roi_access[cpu][i];
         TOTAL_HIT += cache->roi_hit[cpu][i];
         TOTAL_MISS += cache->roi_miss[cpu][i];
-	TOTAL_INSTR_MISS += cache->roi_instr_miss[cpu][i];
+	    TOTAL_INSTR_MISS += cache->roi_instr_miss[cpu][i];
     }
 
     uint64_t num_instrs = ooo_cpu[cpu].finish_sim_instr;
@@ -420,8 +420,9 @@ void reset_cache_stats(uint32_t cpu, CACHE *cache)
 
         cache->sim_access[cpu][i] = 0;
         cache->sim_hit[cpu][i] = 0;
+        cache->sim_instr_hit[cpu][i]=0;
         cache->sim_miss[cpu][i] = 0;
-	cache->sim_instr_miss[cpu][i] = 0;
+	    cache->sim_instr_miss[cpu][i] = 0;
     }
 
     cache->total_miss_latency = 0;
