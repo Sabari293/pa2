@@ -821,7 +821,9 @@ if (writeback_cpu == NUM_CPUS)
             // COLLECT STATS
             sim_hit[writeback_cpu][WQ.entry[index].type]++;
             sim_access[writeback_cpu][WQ.entry[index].type]++;
-
+            if (cache_type == IS_L2C && WQ.entry[index].instruction){
+                sim_instr_hit[writeback_cpu][WQ.entry[index].type]++;
+            }
             // mark dirty
             block[set][way].dirty = 1;
 
@@ -1692,6 +1694,9 @@ if((cache_type == IS_L1I || cache_type == IS_L1D) && reads_ready.size() == 0)
                     //RQ.entry[index].event_cycle = current_core_cycle[read_cpu];
                     sim_hit[read_cpu][RQ.entry[index].type]++;
                     sim_access[read_cpu][RQ.entry[index].type]++;
+                    if (cache_type == IS_L2C && RQ.entry[index].instruction){
+                        sim_instr_hit[read_cpu][RQ.entry[index].type]++;
+                    }
                     HIT[RQ.entry[index].type]++;
                     ACCESS[RQ.entry[index].type]++;
                     RQ.remove_queue(&RQ.entry[index]);
@@ -1768,6 +1773,9 @@ if((cache_type == IS_L1I || cache_type == IS_L1D) && reads_ready.size() == 0)
                 // COLLECT STATS
                 sim_hit[read_cpu][RQ.entry[index].type]++;
                 sim_access[read_cpu][RQ.entry[index].type]++;
+                if (cache_type == IS_L2C && RQ.entry[index].instruction){
+                    sim_instr_hit[read_cpu][RQ.entry[index].type]++;
+                }
 
 
                 // check fill level
@@ -2454,6 +2462,9 @@ if((cache_type == IS_L1I || cache_type == IS_L1D) && reads_ready.size() == 0)
                         // COLLECT STATS
                         sim_hit[prefetch_cpu][PQ.entry[index].type]++;
                         sim_access[prefetch_cpu][PQ.entry[index].type]++;
+                        if (cache_type == IS_L2C && PQ.entry[index].instruction){
+                            sim_instr_hit[prefetch_cpu][PQ.entry[index].type]++;
+                        }
 
                         // run prefetcher on prefetches from higher caches
                         if(PQ.entry[index].pf_origin_level < fill_level)
