@@ -4,8 +4,8 @@
 #define PREFETCH_DEGREE 3
 #define MASK_IP 0xFF
 
-#define UNI_CONF_MAX 2
-#define UNI_CONF_THRESH 2
+#define UNI_CONF_MAX 3
+#define UNI_CONF_THRESH 3
 
 #define LINES_PER_PAGE (1 << (LOG2_PAGE_SIZE - LOG2_BLOCK_SIZE))
 
@@ -21,8 +21,8 @@ class SPP_TRACKER {
     public:
         bool valid;
         uint64_t ip;
-        uint64_t last_page;
-        uint64_t last_off;
+        uint16_t last_page;
+        uint16_t last_off;
         int8_t uni_stride;
         uint8_t uni_conf;
         uint16_t sig;
@@ -31,7 +31,7 @@ class SPP_TRACKER {
         uint8_t pat_valid;
         uint8_t pat_next;
         uint16_t pat_sig[PAT_WAYS];
-        uint16_t pat_stride[PAT_WAYS];
+        int8_t pat_stride[PAT_WAYS];
         uint8_t pat_conf[PAT_WAYS];
         
         void initialize(){
@@ -57,7 +57,7 @@ SPP_TRACKER trackers[SPP_TRACKER_COUNT];
 
 inline uint16_t next_sig(uint16_t sig, int stride){
     uint16_t stride_modified = (stride < 0)? (uint16_t)((-stride) | 0x40) : (uint16_t) stride;
-    return (uint16_t)(((sig << SIG_SHIFT) | stride_modified) & SIG_MASK);
+    return (uint16_t)(((sig << SIG_SHIFT) ^ stride_modified) & SIG_MASK);
 }
 
 inline int pat_find(const SPP_TRACKER &t, uint16_t sig){
@@ -69,7 +69,7 @@ inline int pat_find(const SPP_TRACKER &t, uint16_t sig){
 
 inline int pat_victim(SPP_TRACKER & t){
     for(int i = 0;i < PAT_WAYS ;i++){
-        if(!(t.pat_valid >> i) & 1)return i;
+        if(!((t.pat_valid >> i) & 1))return i;
     }
     for(int i = 0;i < PAT_WAYS; i++){
         int k = (t.pat_next + i) & (PAT_WAYS - 1);
@@ -89,7 +89,7 @@ inline void inc_tracker(int idx){
     trackers[idx].lru = 0;
 }
 
-inline void pat_update(SPP_TRACKER &t,uint8_t sig, int stride){
+inline void pat_update(SPP_TRACKER &t,uint16_t sig, int stride){
     int i = pat_find(t, sig);
     if(i>=0) {
         if(t.pat_stride[i] == stride){
@@ -113,20 +113,23 @@ void CACHE::l1d_prefetcher_initialize()
     std::cout << "------------------------------------------------" << std::endl;
     std::cout << "        Stride Pattern Prefetcher (SPP)         " << std::endl;
     std::cout << "------------------------------------------------" << std::endl;
-    for(int i = 0;i<SPP_TRACKER_COUNT;i++) trackers[i].initialize();
+    for(int i = 0;i<SPP_TRACKER_COUNT;i++){
+        trackers[i].initialize();
+        trackers[i].lru = i;
+    }
 }
 
 void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
 {
     uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE;
     uint64_t page = addr >> LOG2_PAGE_SIZE;
-    int offset = (int)(cl_addr * (LINES_PER_PAGE - 1));
+    int offset = (int)(cl_addr & (LINES_PER_PAGE - 1));
     uint16_t page_id  = (uint16_t)((page ^ (page >> 12)) & 0xFFF);
 
     ip = ip & MASK_IP;
     int idx = 0;
     for (; idx<SPP_TRACKER_COUNT; idx++) {
-        if (trackers[idx].ip == ip)break;
+        if (trackers[idx].valid && trackers[idx].ip == ip)break;
     }
 
     if(idx == SPP_TRACKER_COUNT){
@@ -139,7 +142,6 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
         t.uni_stride = 0;
         t.uni_conf = 0;
         t.sig = 0;
-        t.lru = 0;
         t.pat_valid = 0;
         t.pat_next = 0;
         inc_tracker(idx);
@@ -168,7 +170,7 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
         if(stride == t.uni_stride){
             if(t.uni_conf<UNI_CONF_MAX)t.uni_conf++;
         }
-        else if(t.uni_conf>UNI_CONF_THRESH)t.uni_conf--;
+        else if(t.uni_conf>=UNI_CONF_THRESH)t.uni_conf--;
         else{
             t.uni_stride = (int8_t)stride;
             t.uni_conf = 0;
@@ -181,7 +183,7 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
 
     if(t.uni_conf>=UNI_CONF_THRESH && t.uni_stride!=0){
         for (int i=0; i<PREFETCH_DEGREE; i++) {
-            uint64_t pf_address = (cl_addr + (stride*(i+1))) << LOG2_BLOCK_SIZE;
+            uint64_t pf_address = (cl_addr + (t.uni_stride*(i+1))) << LOG2_BLOCK_SIZE;
 
             // only issue a prefetch if the prefetch address is in the same 4 KB page
             // as the current demand access address
@@ -200,27 +202,17 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
     else{
         uint16_t sig = t.sig;
         int off = offset;
-        for (int i=0; i<PREFETCH_DEGREE; i++) {
-            int idx = pat_find(t,sig);
-            if(idx < 0 || t.pat_conf[idx]<PAT_THRESH || t.pat_stride[idx] == 0)break;
-            int stride1 = t.pat_stride[idx];
-            off+=stride1; 
-            uint64_t pf_address = (cl_addr + off) << LOG2_BLOCK_SIZE;
-
-            // only issue a prefetch if the prefetch address is in the same 4 KB page
-            // as the current demand access address
-            if ((pf_address >> LOG2_PAGE_SIZE) != (addr >> LOG2_PAGE_SIZE))
-                break;
-
-            // check the MSHR occupancy to decide if we're going to prefetch to the L1 or L2
-            bool f = 0;
-            if (MSHR.occupancy < (MSHR.SIZE>>1))
-              f=prefetch_line(ip, addr, pf_address, FILL_L1, 0);
-            else
-              f=prefetch_line(ip, addr, pf_address, FILL_L2, 0);
-            if(!f)break;
-            sig = next_sig(sig,stride1);
-        }
+        for (int k = 0; k < PREFETCH_DEGREE; k++) {
+            int w = pat_find(t, sig);
+            if(w < 0 || t.pat_conf[w] < PAT_THRESH || t.pat_stride[w] == 0)break;
+            int s = t.pat_stride[w];
+            off += s;
+            if(off < 0 || off >= LINES_PER_PAGE)break;
+            uint64_t pf_addr = (page << LOG2_PAGE_SIZE) | ((uint64_t)off << LOG2_BLOCK_SIZE);
+            int fill = (MSHR.occupancy < (MSHR.SIZE >> 1)) ? FILL_L1 : FILL_L2;
+            if (!prefetch_line(ip, addr, pf_addr, fill, 0))break;
+            sig = next_sig(sig, s);
+        } 
     }
 
 
