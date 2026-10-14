@@ -2,7 +2,14 @@
 
 #define maxRRPV 3
 #define PREFETCH_INST 2
+#define LEADER_STRIDE 32
+#define T 0.2
 uint32_t l2_rrpv[L2C_SET][L2C_WAY];
+
+static uint64_t ld_instr_acc [NUM_CPUS];
+static uint64_t ld_instr_miss[NUM_CPUS];
+static uint64_t ld_total_acc [NUM_CPUS];
+static uint64_t ld_total_miss[NUM_CPUS];
 
 // initialize replacement state
 void CACHE::l2c_initialize_replacement()
@@ -14,15 +21,41 @@ void CACHE::l2c_initialize_replacement()
             l2_rrpv[i][j] = maxRRPV;
         }
     }
+
+    for (int c = 0; c < NUM_CPUS; c++) {
+        ld_instr_acc[c] = ld_instr_miss[c] = 0;
+        ld_total_acc[c] = ld_total_miss[c] = 0;
+    }
+}
+
+
+static inline bool is_irrip(uint32_t cpu, uint32_t set){
+    if(set%LEADER_STRIDE == 0) return false;
+
+    uint64_t d = ld_total_acc[cpu] + ld_total_miss[cpu];
+    if(d==0)return false;
+
+    double r = (double)(ld_instr_acc[cpu] + ld_instr_miss[cpu]) / (double)d;
+    return r > T;
+}
+
+static inline void leader_update(uint32_t cpu, uint8_t hit, uint8_t isInstruction)
+{
+    ld_total_acc[cpu]++;
+    if (!hit) ld_total_miss[cpu]++;
+
+    if (isInstruction) {
+        ld_instr_acc[cpu]++;
+        if (!hit) ld_instr_miss[cpu]++;
+    }
 }
 
 // find replacement victim
 uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
-{
+{   
+
     // look for the maxRRPV line
-    //float r = (sim_instr_miss[cpu][type]+sim_instr_hit[cpu][type])/(sim_hit[cpu][type]+sim_miss[cpu][type]+0.0000001);
-    float r = (sim_instr_miss[cpu][type])/(sim_miss[cpu][type]+0.0000001);
-    if(((r>0.15 || type==PREFETCH) && set%32!=0)){
+    if(is_irrip(cpu, set)){
         while (1)
         {
             for (int i=0; i<L2C_WAY; i++)
@@ -89,8 +122,7 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t wa
     // uncomment this line to see the L2C accesses
     // cout << "CPU: " << cpu << "  L2C " << setw(9) << TYPE_NAME << " set: " << setw(5) << set << " way: " << setw(2) << way;
     // cout << hex << " paddr: " << setw(12) << paddr << " ip: " << setw(8) << ip << " victim_addr: " << victim_addr << dec << endl;
-    // float r = (sim_instr_miss[cpu][type]+sim_instr_hit[cpu][type])/(sim_hit[cpu][type]+sim_miss[cpu][type]+0.0000001);
-    float r = (sim_instr_miss[cpu][type])/(sim_miss[cpu][type]+0.0000001);
+    if (set%LEADER_STRIDE==0)leader_update(cpu, hit, isInstruction);
     if (hit){
         if(type == PREFETCH){
             l2_rrpv[set][way] = maxRRPV;
@@ -105,7 +137,7 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t wa
             return ;
         }
         l2_rrpv[set][way] = maxRRPV-1;  //insert with RRPV2
-        if((r>0.15 && set%32!=0) && isInstruction)l2_rrpv[set][way]=0;
+        if (isInstruction && is_irrip(cpu, set))l2_rrpv[set][way] = 0;
     }
 }
 
