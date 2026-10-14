@@ -3,7 +3,6 @@
 #define maxRRPV 3
 #define PREFETCH_INST 2
 uint32_t l2_rrpv[L2C_SET][L2C_WAY];
-uint32_t pf[L2C_SET][L2C_WAY];
 
 // initialize replacement state
 void CACHE::l2c_initialize_replacement()
@@ -13,7 +12,6 @@ void CACHE::l2c_initialize_replacement()
     for (int i=0; i<L2C_SET; i++) {
         for (int j=0; j<L2C_WAY; j++) {
             l2_rrpv[i][j] = maxRRPV;
-            pf[i][j]=0;
         }
     }
 }
@@ -22,13 +20,13 @@ void CACHE::l2c_initialize_replacement()
 uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
 {
     // look for the maxRRPV line
-    float r = (sim_instr_miss[cpu][type]+sim_instr_hit[cpu][type])/(sim_hit[cpu][type]+sim_miss[cpu][type]+0.0000001);
-    //float r = (sim_instr_miss[cpu][type])/(sim_miss[cpu][type]+0.0000001);
+    //float r = (sim_instr_miss[cpu][type]+sim_instr_hit[cpu][type])/(sim_hit[cpu][type]+sim_miss[cpu][type]+0.0000001);
+    float r = (sim_instr_miss[cpu][type])/(sim_miss[cpu][type]+0.0000001);
     if(((r>0.15 || type==PREFETCH) && set%32!=0)){
         while (1)
         {
             for (int i=0; i<L2C_WAY; i++)
-                if (l2_rrpv[set][i] == maxRRPV && pf[set][i] && current_set[i].instruction==0)
+                if (l2_rrpv[set][i] == maxRRPV && current_set[i].prefetch && current_set[i].instruction==0)
                     return i;
             for (int i=0; i<L2C_WAY; i++)
                 if (l2_rrpv[set][i] == maxRRPV && current_set[i].instruction==0)
@@ -91,30 +89,23 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t wa
     // uncomment this line to see the L2C accesses
     // cout << "CPU: " << cpu << "  L2C " << setw(9) << TYPE_NAME << " set: " << setw(5) << set << " way: " << setw(2) << way;
     // cout << hex << " paddr: " << setw(12) << paddr << " ip: " << setw(8) << ip << " victim_addr: " << victim_addr << dec << endl;
-    float r = (sim_instr_miss[cpu][type]+sim_instr_hit[cpu][type])/(sim_hit[cpu][type]+sim_miss[cpu][type]+0.0000001);
-    //float r = (sim_instr_miss[cpu][type])/(sim_miss[cpu][type]+0.0000001);
+    // float r = (sim_instr_miss[cpu][type]+sim_instr_hit[cpu][type])/(sim_hit[cpu][type]+sim_miss[cpu][type]+0.0000001);
+    float r = (sim_instr_miss[cpu][type])/(sim_miss[cpu][type]+0.0000001);
     if (hit){
-        if(type==PREFETCH){
-            return;
-        }
-        if(pf[set][way]){
+        if(type == PREFETCH){
             l2_rrpv[set][way] = maxRRPV;
-            pf[set][way] = 0;
             return ;
         }
         l2_rrpv[set][way] = 0;
-        pf[set][way] = 0;
         
     }
     else{
         if(type == PREFETCH){
             l2_rrpv[set][way] = PREFETCH_INST;
-            pf[set][way] = 1;
             return ;
         }
         l2_rrpv[set][way] = maxRRPV-1;  //insert with RRPV2
         if((r>0.15 && set%32!=0) && isInstruction)l2_rrpv[set][way]=0;
-        pf[set][way] = 0;
     }
 }
 
