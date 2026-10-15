@@ -1,221 +1,286 @@
 #include "cache.h"
+#include <iostream>
+#include <cmath>
+#include <algorithm>
 
-#define SPP_TRACKER_COUNT 24
-#define PREFETCH_DEGREE 3
-#define MASK_IP 0xFF
+#define SPP_TRACKER_COUNT   64      
+#define MAX_PREFETCH_DEGREE 4       
+#define MASK_IP 0x3FF   
 
-#define UNI_CONF_MAX 3
-#define UNI_CONF_THRESH 3
+#define UNI_CONF_MAX  3       
+#define UNI_CONF_THRESH 3      
 
-#define LINES_PER_PAGE (1 << (LOG2_PAGE_SIZE - LOG2_BLOCK_SIZE))
-
+#define LINES_PER_PAGE (1 << (LOG2_PAGE_SIZE - LOG2_BLOCK_SIZE)) 
 #define SIG_BITS 12
-#define SIG_SHIFT 3
 #define SIG_MASK ((1 << SIG_BITS) - 1)
 
-#define PAT_WAYS 8 // no of patterns
-#define PAT_MAX 3
-#define PAT_THRESH 1
+#define PAT_WAYS 8       
+#define PAT_MAX 3       
+#define PAT_THRESH 1       
+
+#define THROTTLE_SAMPLE_SZ  100     
 
 class SPP_TRACKER {
-    public:
-        bool valid;
-        uint64_t ip;
-        uint16_t last_page;
-        uint16_t last_off;
-        int8_t uni_stride;
-        uint8_t uni_conf;
-        uint16_t sig;
-        uint8_t lru;
+  public:
+    bool     valid;
+    uint64_t ip;
+    uint64_t last_cl_addr;            
+    int8_t   uni_stride;              
+    uint8_t  uni_conf;                
+    uint16_t sig;                     
+    uint8_t  lru;                     
 
-        uint8_t pat_valid;
-        uint8_t pat_next;
-        uint16_t pat_sig[PAT_WAYS];
-        int8_t pat_stride[PAT_WAYS];
-        uint8_t pat_conf[PAT_WAYS];
-        
-        void initialize(){
-            valid = false;
-            ip = 0;
-            last_page = 0;
-            last_off = 0;
-            uni_stride = 0;
-            uni_conf = 0;
-            sig = 0;
-            lru = 0;
-            pat_valid = 0;
-            pat_next = 0;
-            for (int w = 0; w < PAT_WAYS; w++) {
-                pat_sig[w] = 0;
-                pat_stride[w] = 0;
-                pat_conf[w] = 0;
-            }
+    uint8_t  pat_valid;               
+    uint8_t  pat_next;                
+    uint16_t pat_sig[PAT_WAYS];       
+    int8_t   pat_stride[PAT_WAYS];    
+    uint8_t  pat_conf[PAT_WAYS];      
+
+    void initialize(int lru_val) {
+        valid = false;
+        ip = 0;
+        last_cl_addr = 0;
+        uni_stride = 0;
+        uni_conf = 0;
+        sig = 0;
+        lru = (uint8_t)lru_val;
+        pat_valid = 0;
+        pat_next = 0;
+        for (int i = 0; i < PAT_WAYS; i++) {
+            pat_sig[i] = 0;
+            pat_stride[i] = 0;
+            pat_conf[i] = 0;
         }
+    }
 };
 
 SPP_TRACKER trackers[SPP_TRACKER_COUNT];
 
-inline uint16_t next_sig(uint16_t sig, int stride){
-    uint16_t stride_modified = (stride < 0)? (uint16_t)((-stride) | 0x40) : (uint16_t) stride;
-    return (uint16_t)(((sig << SIG_SHIFT) ^ stride_modified) & SIG_MASK);
+static uint64_t last_useful_cnt = 0;
+static uint64_t last_lower_cnt = 0;
+static int current_degree = 3; 
+static double latest_accuracy = 0.60;
+
+inline uint16_t next_sig(uint16_t sig, int stride) {
+    
+    uint16_t enc = (uint16_t)((stride + 32) & 0x3F);
+    return (uint16_t)(((sig << 3) ^ enc) & SIG_MASK);
 }
 
-inline int pat_find(const SPP_TRACKER &t, uint16_t sig){
-    for(int i = 0;i < PAT_WAYS ; i++){
-        if(((t.pat_valid >> i) & 1) && t.pat_sig[i] == sig) return i;
+inline int pat_find(const SPP_TRACKER &t, uint16_t sig) {
+    for (int i = 0; i < PAT_WAYS; i++) {
+        if (((t.pat_valid >> i) & 1) && t.pat_sig[i] == sig)
+            return i;
     }
     return -1;
 }
 
-inline int pat_victim(SPP_TRACKER & t){
-    for(int i = 0;i < PAT_WAYS ;i++){
-        if(!((t.pat_valid >> i) & 1))return i;
+inline int pat_victim(SPP_TRACKER &t) {
+    
+    for (int i = 0; i < PAT_WAYS; i++) {
+        if (!((t.pat_valid >> i) & 1))
+            return i;
     }
-    for(int i = 0;i < PAT_WAYS; i++){
+    
+    for (int i = 0; i < PAT_WAYS; i++) {
         int k = (t.pat_next + i) & (PAT_WAYS - 1);
-        if(t.pat_conf[k] == 0){
+        if (t.pat_conf[k] == 0) {
             t.pat_next = (k + 1) & (PAT_WAYS - 1);
             return k;
         }
     }
-    for(int i = 0;i < PAT_WAYS; i++) t.pat_conf[i]--;
-    return -1;
+    
+    for (int i = 0; i < PAT_WAYS; i++) {
+        if (t.pat_conf[i] > 0) t.pat_conf[i]--;
+    }
+    int k = t.pat_next;
+    t.pat_next = (k + 1) & (PAT_WAYS - 1);
+    return k;
 }
 
-inline void inc_tracker(int idx){
-    for(int i = 0;i < SPP_TRACKER_COUNT; i++){
-        if(trackers[i].lru < trackers[idx].lru)trackers[i].lru++;
+inline void pat_update(SPP_TRACKER &t, uint16_t sig, int stride) {
+    int i = pat_find(t, sig);
+    if(i >= 0){
+        if(t.pat_stride[i] == (int8_t)stride){
+            if (t.pat_conf[i] < PAT_MAX) t.pat_conf[i]++;
+        } 
+        else if(t.pat_conf[i] > 0){
+            t.pat_conf[i]--;
+        } 
+        else{
+            t.pat_stride[i] = (int8_t)stride;
+        }
+        return;
+    }
+    int idx = pat_victim(t);
+    if (idx < 0) return;
+    t.pat_valid |= (uint8_t)(1 << idx);
+    t.pat_sig[idx] = sig;
+    t.pat_stride[idx] = (int8_t)stride;
+    t.pat_conf[idx] = 0;
+}
+
+inline void update_lru(int idx) {
+    for (int i = 0; i < SPP_TRACKER_COUNT; i++) {
+        if (trackers[i].lru < trackers[idx].lru)
+            trackers[i].lru++;
     }
     trackers[idx].lru = 0;
 }
 
-inline void pat_update(SPP_TRACKER &t,uint16_t sig, int stride){
-    int i = pat_find(t, sig);
-    if(i>=0) {
-        if(t.pat_stride[i] == stride){
-            if(t.pat_conf[i] < PAT_MAX)t.pat_conf[i]++;
+inline void check_accuracy_throttling(CACHE *cache) {
+    uint64_t cur_useful = cache->pf_useful;
+    uint64_t cur_lower = cache->pf_lower_level;
+
+    if (cur_useful < last_useful_cnt || cur_lower < last_lower_cnt) {
+        last_useful_cnt = cur_useful;
+        last_lower_cnt = cur_lower;
+        return;
+    }
+
+    uint64_t d_useful = cur_useful - last_useful_cnt;
+    uint64_t d_lower = cur_lower - last_lower_cnt;
+
+    if (d_lower >= THROTTLE_SAMPLE_SZ) {
+        latest_accuracy = (d_lower > 0) ? ((double)d_useful / (double)d_lower) : 0.0;
+
+        if(latest_accuracy >= 0.80) {
+            current_degree = 6;
         }
-        else if(t.pat_conf[i]>0)t.pat_conf[i]--;
-        else t.pat_stride[i] = (int8_t)stride;
-        return ;
-    }
+        else if (latest_accuracy >= 0.60) {
+            current_degree = 4;
+        } else if (latest_accuracy >= 0.45) {
+            current_degree = 3;
+        } else if (latest_accuracy >= 0.25) {
+            current_degree = 2;
+        } else {
+            current_degree = 1;
+        }
 
-    int idx = pat_victim(t);
-    if(idx<0)return ;
-    t.pat_valid |= (uint8_t)(1<<idx);
-    t.pat_sig[idx] = sig;
-    t.pat_stride[idx] = stride;
-    t.pat_conf[idx] = 0;
-
-}
-void CACHE::l1d_prefetcher_initialize() 
-{
-    std::cout << "------------------------------------------------" << std::endl;
-    std::cout << "        Stride Pattern Prefetcher (SPP)         " << std::endl;
-    std::cout << "------------------------------------------------" << std::endl;
-    for(int i = 0;i<SPP_TRACKER_COUNT;i++){
-        trackers[i].initialize();
-        trackers[i].lru = i;
+        last_useful_cnt = cur_useful;
+        last_lower_cnt  = cur_lower;
     }
 }
 
-void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
+void CACHE::l1d_prefetcher_initialize()
 {
+    for (int i = 0; i < SPP_TRACKER_COUNT; i++) {
+        trackers[i].initialize(i);
+    }
+    last_useful_cnt = 0;
+    last_lower_cnt = 0;
+    current_degree = 3;
+    latest_accuracy = 0.60;
+}
+
+void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit,uint8_t type, uint8_t critical_ip_flag)
+{
+    
+    check_accuracy_throttling(this);
     uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE;
-    uint64_t page = addr >> LOG2_PAGE_SIZE;
-    int offset = (int)(cl_addr & (LINES_PER_PAGE - 1));
-    uint16_t page_id  = (uint16_t)((page ^ (page >> 12)) & 0xFFF);
+    uint64_t tag_ip  = ip & MASK_IP;
 
-    ip = ip & MASK_IP;
-    int idx = 0;
-    for (; idx<SPP_TRACKER_COUNT; idx++) {
-        if (trackers[idx].valid && trackers[idx].ip == ip)break;
+    int index = -1;
+    for (int i = 0; i < SPP_TRACKER_COUNT; i++) {
+        if (trackers[i].valid && trackers[i].ip == tag_ip) {
+            index = i;
+            break;
+        }
     }
 
-    if(idx == SPP_TRACKER_COUNT){
-        for(idx = 0;idx < SPP_TRACKER_COUNT; idx++) if(trackers[idx].lru == SPP_TRACKER_COUNT - 1)break;
-        SPP_TRACKER &t = trackers[idx];
+    if (index == -1) {
+        for (int i = 0; i < SPP_TRACKER_COUNT; i++) {
+            if (!trackers[i].valid) {
+                index = i;
+                break;
+            }
+        }
+        if (index == -1) {
+            for (int i = 0; i < SPP_TRACKER_COUNT; i++) {
+                if (trackers[i].lru == (SPP_TRACKER_COUNT - 1)) {
+                    index = i;
+                    break;
+                }
+            }
+        }
+        SPP_TRACKER &t = trackers[index];
         t.valid = true;
-        t.ip = ip;
-        t.last_page = page_id;
-        t.last_off = (uint8_t)offset;
+        t.ip = tag_ip;
+        t.last_cl_addr = cl_addr;
         t.uni_stride = 0;
         t.uni_conf = 0;
         t.sig = 0;
         t.pat_valid = 0;
         t.pat_next = 0;
-        inc_tracker(idx);
-        return ;
+        update_lru(index);
+        return;
     }
 
-    inc_tracker(idx);
-    SPP_TRACKER &t = trackers[idx];
-    int stride = 0;
-    bool f = 1;
-    if(t.last_page == page_id)stride = offset-(int)t.last_off;
-    else{
-        int fwd = offset + LINES_PER_PAGE - (int)t.last_off;  
-        int bwd = offset - LINES_PER_PAGE - (int)t.last_off;  
+    update_lru(index);
+    SPP_TRACKER &t = trackers[index];
 
-        if(fwd < LINES_PER_PAGE)stride = fwd;
-        else if(bwd > -LINES_PER_PAGE) stride = bwd;
-        else{ 
-            stride = 0; 
-            f = false; 
+    int64_t raw_stride = (int64_t)cl_addr - (int64_t)t.last_cl_addr;
+    t.last_cl_addr = cl_addr;
+
+    if (raw_stride == 0)return;
+
+    if (raw_stride < -63 || raw_stride > 63) {
+        t.uni_conf = 0;
+        t.uni_stride = 0;
+        t.sig = 0;
+        return;
+    }
+
+    int stride = (int)raw_stride;
+    if(stride == (int)t.uni_stride){
+        if(t.uni_conf < UNI_CONF_MAX) t.uni_conf++;
+    } 
+    else if (t.uni_conf > 0) {
+        t.uni_conf--;
+    } 
+    else {
+        t.uni_stride = (int8_t)stride;
+        t.uni_conf = 0;
+    }
+
+    pat_update(t, t.sig, stride);
+    t.sig = next_sig(t.sig, stride);
+
+    if (t.uni_conf >= UNI_CONF_THRESH && t.uni_stride != 0) {
+        int eff_degree = (t.uni_conf >= 2) ? current_degree : std::min(current_degree, 2);
+        for (int i = 0; i < eff_degree; i++) {
+            int64_t delta = (int64_t)t.uni_stride * (i + 1);
+            uint64_t pf_address = (uint64_t)((int64_t)cl_addr + delta) << LOG2_BLOCK_SIZE;
+            if ((pf_address >> LOG2_PAGE_SIZE) != (addr >> LOG2_PAGE_SIZE))break;
+            int fill_level = (MSHR.occupancy < (MSHR.SIZE >> 1)) ? FILL_L1 : FILL_L2;
+            bool ok = prefetch_line(ip, addr, pf_address, fill_level, 0);
+            if (!ok) break;
         }
     }
 
-    if(f){
-        if(stride == 0)return ;
-        if(stride == t.uni_stride){
-            if(t.uni_conf<UNI_CONF_MAX)t.uni_conf++;
-        }
-        else if(t.uni_conf>=UNI_CONF_THRESH)t.uni_conf--;
-        else{
-            t.uni_stride = (int8_t)stride;
-            t.uni_conf = 0;
-        }
-        pat_update(t, t.sig, stride);
-        t.sig = next_sig(t.sig, stride);
-    }
-    t.last_page = page_id;
-    t.last_off = (uint8_t)offset;
+    else {
+        uint16_t sig   = t.sig; 
+        int64_t  delta = 0;
+        for (int i = 0; i < current_degree; i++) {
+            int wi = pat_find(t, sig);
+            if(wi < 0 || t.pat_conf[wi] < PAT_THRESH || t.pat_stride[wi] == 0)break;
 
-    if(t.uni_conf>=UNI_CONF_THRESH && t.uni_stride!=0){
-        for (int i=0; i<PREFETCH_DEGREE; i++) {
-            uint64_t pf_address = (cl_addr + (t.uni_stride*(i+1))) << LOG2_BLOCK_SIZE;
+            if(i >= 2 && t.pat_conf[wi] < 2)break;
 
-            // only issue a prefetch if the prefetch address is in the same 4 KB page
-            // as the current demand access address
-            if ((pf_address >> LOG2_PAGE_SIZE) != (addr >> LOG2_PAGE_SIZE))
-                break;
+            int s = (int)t.pat_stride[wi];
+            delta += s;
 
-            // check the MSHR occupancy to decide if we're going to prefetch to the L1 or L2
-            bool f = 0;
-            if (MSHR.occupancy < (MSHR.SIZE>>1))
-              f=prefetch_line(ip, addr, pf_address, FILL_L1, 0);
-            else
-              f=prefetch_line(ip, addr, pf_address, FILL_L2, 0);
-            if(!f)break;
-        }
-    }
-    else{
-        uint16_t sig = t.sig;
-        int off = offset;
-        for (int k = 0; k < PREFETCH_DEGREE; k++) {
-            int w = pat_find(t, sig);
-            if(w < 0 || t.pat_conf[w] < PAT_THRESH || t.pat_stride[w] == 0)break;
-            int s = t.pat_stride[w];
-            off += s;
-            if(off < 0 || off >= LINES_PER_PAGE)break;
-            uint64_t pf_addr = (page << LOG2_PAGE_SIZE) | ((uint64_t)off << LOG2_BLOCK_SIZE);
-            int fill = (MSHR.occupancy < (MSHR.SIZE >> 1)) ? FILL_L1 : FILL_L2;
-            if (!prefetch_line(ip, addr, pf_addr, fill, 0))break;
+            uint64_t pf_address = (uint64_t)((int64_t)cl_addr + delta) << LOG2_BLOCK_SIZE;
+
+            if((pf_address >> LOG2_PAGE_SIZE) != (addr >> LOG2_PAGE_SIZE))break;
+
+            int fill_level = (MSHR.occupancy < (MSHR.SIZE >> 1)) ? FILL_L1 : FILL_L2;
+            bool ok = prefetch_line(ip, addr, pf_address, fill_level, 0);
+            if (!ok) break;
+
             sig = next_sig(sig, s);
-        } 
+        }
     }
-
-
 }
 
 void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t v_evicted_addr, uint64_t evicted_addr, uint32_t metadata_in)
